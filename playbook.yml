@@ -1,0 +1,362 @@
+# Ожидание доступности хостов
+- name: Setup web servers
+  hosts: all
+  become: yes
+
+  pre_tasks:
+    - name: Validating the ssh port is open and
+      wait_for:
+        host: '{{ (ansible_ssh_host|default(ansible_host))|default(inventory_hostname) }}'
+        port: 22
+        delay: 5
+        timeout: 300
+        state: started
+        search_regex: OpenSSH
+
+  tasks:
+    - name: Install Nginx
+      apt:
+        name: nginx
+        state: present
+
+    - name: Copy Nginx configuration
+      template:
+        src: nginx.conf.j2
+        dest: /etc/nginx/nginx.conf
+      notify:
+        - restart nginx
+
+    - name: Ensure Nginx is running
+      service:
+        name: nginx
+        state: started
+        enabled: yes
+
+    - name: Download Node Exporter
+      get_url:
+        url: https://github.com/prometheus/node_exporter/releases/download/v1.8.2/node_exporter-1.8.2.linux-amd64.tar.gz
+        dest: /tmp/node_exporter.tar.gz
+
+    - name: Extract Node Exporter
+      unarchive:
+        src: /tmp/node_exporter.tar.gz
+        dest: /tmp/
+        remote_src: yes   
+
+    - name: Move Node Exporter binary
+      command: mv /tmp/node_exporter-1.8.2.linux-amd64/node_exporter /usr/local/bin/
+
+    - name: Change ownership of /usr/local/bin/
+      file:
+        path: /usr/local/bin/node_exporter
+        owner: prometheus
+        group: prometheus
+
+    - name: Create Node Exporter service
+      copy:
+        dest: /etc/systemd/system/node_exporter.service
+        content: |
+          [Unit]
+          Description=Node Exporter
+          Wants=network-online.target
+          After=network-online.target
+
+          [Service]
+          User=prometheus
+          Group=prometheus
+          Type=simple
+          ExecStart=/usr/local/bin/node_exporter
+          Restart=always
+
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Reload systemd configuration
+      systemd:
+        daemon_reload: yes 
+
+    - name: Start Node Exporter service
+      systemd:
+        name: node_exporter
+        state: started
+        enabled: yes
+
+    - name: Download Nginx Log Exporter
+      get_url:
+        url: https://github.com/martin-helmich/prometheus-nginxlog-exporter/releases/download/v1.11.0/prometheus-nginxlog-exporter_1.11.0_linux_amd64.tar.gz
+        dest: /tmp/prometheus-nginxlog-exporter.tar.gz
+
+    - name: Extract Nginx Log Exporter
+      unarchive:
+        src: /tmp/prometheus-nginxlog-exporter.tar.gz
+        dest: /tmp/
+        remote_src: yes 
+
+    - name: Move Nginx Log Exporter binary
+      command: mv /tmp/prometheus-nginxlog-exporter_1.11.0_linux_amd64/prometheus-nginxlog-exporter /usr/local/bin/
+
+    - name: Change ownership of /usr/local/bin/ recursively
+      file:
+        path: /usr/local/bin/prometheus-nginxlog-exporter
+        owner: prometheus
+        group: prometheus
+        recurse: yes
+
+    - name: Create Nginx Log Exporter service
+      copy:
+        dest: /etc/systemd/system/prometheus-nginxlog-exporter.service
+        content: |
+          [Unit]
+          Description=Nginx Log Exporter
+          Wants=network-online.target
+          After=network-online.target
+
+          [Service]
+          User=nobody
+          ExecStart=/usr/local/bin/prometheus-nginxlog-exporter -nginx.scrape-uri=http://localhost/nginx_status
+          Restart=always
+
+          [Install]
+          WantedBy=multi-user.targe
+
+    - name: Reload systemd configuration
+      systemd:
+        daemon_reload: yes       
+
+    - name: Start Nginx Log Exporter service
+      systemd:
+        name: nginx_log_exporter
+        state: started
+        enabled: yes    
+
+- name: Setup Prometheus
+  hosts: prometheus
+  become: yes
+  tasks:
+    - name: Download Prometheus
+      get_url:
+        url: https://github.com/prometheus/prometheus/releases/download/v3.0.1/prometheus-3.0.1.linux-amd64.tar.gz
+        dest: /tmp/prometheus.tar.gz
+
+    - name: Extract Prometheus
+      unarchive:
+        src: /tmp/prometheus.tar.gz
+        dest: /tmp/
+        remote_src: yes  
+
+    - name: Create system group prometheus
+      group:
+        name: prometheus
+        system: yes
+
+    - name: Create system user prometheus
+      user:
+        name: prometheus
+        shell: /sbin/nologin
+        system: yes
+        group: prometheus
+
+    - name: Move Prometheus binaries
+      command: mv /tmp/prometheus-3.0.1.linux-amd64/{{ item }} /usr/local/bin/
+      with_items:
+        - prometheus
+        - promtool
+
+    - name: Change ownership of /usr/local/bin/prometheus
+      file:
+        path: /usr/local/bin/prometheus
+        owner: prometheus
+        group: prometheus
+
+    - name: Change ownership of /usr/local/bin/promtool
+      file:
+        path: /usr/local/bin/promtool
+        owner: prometheus
+        group: prometheus    
+
+    - name: Create Prometheus configuration directory
+      file:
+        path: /etc/prometheus
+        state: directory
+
+    - name: Create Prometheus data directory
+      file:
+        path: /var/lib/prometheus
+        state: directory    
+
+    - name: Move consoles directory to /etc/prometheus
+      command: mv /tmp/prometheus-3.0.1.linux-amd64/consoles /etc/prometheus
+
+    - name: Move console_libraries directory to /etc/prometheus
+      command: mv /tmp/prometheus-3.0.1.linux-amd64/console_libraries /etc/prometheus
+
+    - name: Copy Prometheus configuration
+      template:
+        src: prometheus.yml.j2
+        dest: /etc/prometheus-3.0.1.linux-amd64/prometheus.yml
+
+    - name: Change ownership of /etc/prometheus
+      file:
+        path: /etc/prometheus
+        owner: prometheus
+        group: prometheus
+
+    - name: Change ownership of /etc/prometheus/consoles recursively
+      file:
+        path: /etc/prometheus/consoles
+        owner: prometheus
+        group: prometheus
+        recurse: yes
+
+    - name: Change ownership of /etc/prometheus/console_libraries recursively
+      file:
+        path: /etc/prometheus/console_libraries
+        owner: prometheus
+        group: prometheus
+        recurse: yes
+
+    - name: Change ownership of /var/lib/prometheus recursively
+      file:
+        path: /var/lib/prometheus
+        owner: prometheus
+        group: prometheus
+        recurse: yes
+
+    - name: Create Prometheus service
+      copy:
+        dest: /etc/systemd/system/prometheus.service
+        content: |
+          [Unit]
+          Description=Background service of Prometheus
+          Wants=network-online.target
+          After=network-online.target
+
+          [Service]
+          User=prometheus
+          Group=prometheus
+          Type=simple
+          ExecStart=/usr/local/bin/prometheus \
+          --config.file /etc/prometheus/prometheus.yml \
+          --storage.tsdb.path /var/lib/prometheus/ \
+          --web.console.templates=/etc/prometheus/consoles \
+          --web.console.libraries=/etc/prometheus/console_libraries
+          ExecReload=/bin/kill -HUP $MAINPID Restart=on-failure
+          
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Reload systemd configuration
+      systemd:
+        daemon_reload: yes 
+
+    - name: Start Prometheus service
+      systemd:
+        name: prometheus
+        state: started
+        enabled: yes   
+
+- name: Setup Grafana
+  hosts: grafana
+  become: yes
+  tasks:
+    - name: Install dependencies for Grafana
+      apt:
+        name: "{{ item }}"
+        state: present
+      with_items:
+        - adduser
+        - libfontconfig1
+        - musl
+
+    - name: Download Grafana
+      get_url:
+        url: https://dl.grafana.com/oss/release/grafana_11.4.0_amd64.deb
+        dest: /tmp/grafana_11.4.0_amd64.deb
+
+    - name: Install Grafana
+      apt:
+        deb: /tmp/grafana-enterprise_11.4.0_amd64.deb
+
+    - name: Start Grafana service
+      systemd:
+        name: grafana-server
+        state: started
+        enabled: yes     
+
+- name: Setup Elasticsearch
+  hosts: elasticsearch
+  become: yes
+  tasks:
+    - name: Download Elasticsearch
+      get_url:
+        url: https://github.com/RuslanArestov/test-git-lfc/raw/refs/heads/master/packages/elasticsearch-8.17.0-amd64.deb
+        dest: /tmp/elasticsearch-8.17.0-amd64.deb
+
+    - name: Install Elasticsearch
+      apt:
+        deb: /tmp/elasticsearch-8.17.0-amd64.deb
+
+    - name: Start Elasticsearch service
+      systemd:
+        name: elasticsearch
+        state: started
+        enabled: yes
+
+    - name: Download Filebeat
+      get_url:
+        url: https://artifacts.elastic.co/downloads/beats/filebeat/filebeat-7.17.0-amd64.deb
+        dest: /tmp/filebeat-7.17.0-amd64.deb
+
+    - name: Install Filebeat
+      apt:
+        deb: /tmp/filebeat-7.17.0-amd64.deb   
+
+    - name: Copy Filebeat configuration
+      template:
+        src: filebeat.yml.j2
+        dest: /etc/filebeat/filebeat.yml
+
+    - name: Start Filebeat service
+      systemd:
+        name: filebeat
+        state: started
+        enabled: yes    
+
+- name: Setup Kibana
+  hosts: kibana
+  become: yes
+  tasks:
+    - name: Download Kibana
+      get_url:
+        url: https://github.com/RuslanArestov/test-git-lfc/raw/refs/heads/master/packages/kibana-8.17.0-amd64.deb
+        dest: /tmp/kibana-8.17.0-amd64.deb
+
+    - name: Install Kibana
+      apt:
+        deb: /tmp/kibana-8.17.0-amd64.deb
+
+    - name: Start Kibana service
+      systemd:
+        name: kibana
+        state: started
+        enabled: yes
+
+- name: Remove .deb and .tar.gz packages from /tmp
+  hosts: all
+  become: yes
+  tasks:
+    - name: Remove the deb package
+      file:
+        path: /tmp/*.deb
+        state: absent 
+
+    - name: Remove the archive after extraction
+      file:
+        path: /tmp/*.tar.gz
+        state: absent      
+
+  handlers:
+    - name: restart nginx
+      service:
+        name: nginx
+        state: restarted      
