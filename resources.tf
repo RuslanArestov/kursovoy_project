@@ -44,13 +44,13 @@ resource "yandex_vpc_route_table" "route-table" {
   static_route {
     destination_prefix = "192.168.20.0/24"
     next_hop_address    = yandex_compute_instance.bastion_host.network_interface[0].ip_address
-  }
+  }*/
 
   # Маршрут по умолчанию
   static_route {
     destination_prefix = "0.0.0.0/0"
     gateway_id         = yandex_vpc_gateway.egress-gateway.id
-  }*/
+  }
 }
 
 ##############Создание VPC и подсетей, и таблицы маршрутизации###############
@@ -145,6 +145,7 @@ resource "yandex_compute_instance_group" "web_server" {
 
   instance_template {
     platform_id = "standard-v1"
+    name        = "web-server-{instance.index}"
     resources {
       core_fraction = 100
       memory        = 2
@@ -154,7 +155,7 @@ resource "yandex_compute_instance_group" "web_server" {
     boot_disk {
       mode = "READ_WRITE"
       initialize_params {
-        image_id = var.image-id 
+        image_id = data.yandex_compute_image.ubuntu.image_id 
         type     = "network-hdd"
         size     = 10
       }
@@ -171,8 +172,7 @@ resource "yandex_compute_instance_group" "web_server" {
     }
 
     metadata = {
-      #user-data = "${file("./cloud-config.txt")}"
-      ssh-keys  = "sysadmin:${local.web_server_ssh_key}"
+    user-data = data.template_file.cloudinit_web.rendered
     }
   }
 
@@ -339,7 +339,7 @@ resource "yandex_compute_instance" "bastion_host" {
   boot_disk {
       mode = "READ_WRITE"
       initialize_params {
-        image_id = var.image-id 
+        image_id = data.yandex_compute_image.ubuntu.image_id 
         type     = "network-hdd"
         size     = 10
       }
@@ -356,9 +356,7 @@ resource "yandex_compute_instance" "bastion_host" {
   }
 
   metadata = {
-    user-data = "${file("./cloud-config.txt")}"
-    ssh-keys  = "sysadmin:${local.bastion_ssh_key}"
-    serial-port-enable = 1
+    user-data = data.template_file.cloudinit_bastion.rendered
   }
 
   labels = {
@@ -378,14 +376,14 @@ resource "yandex_compute_instance" "prometheus" {
 
   resources {
     core_fraction = 5
-    memory        = 4
+    memory        = 2
     cores         = 2 
   }
 
   boot_disk {
       mode = "READ_WRITE"
       initialize_params {
-        image_id = var.image-id 
+        image_id = data.yandex_compute_image.ubuntu.image_id 
         type     = "network-hdd"
         size     = 10
       }
@@ -402,8 +400,7 @@ resource "yandex_compute_instance" "prometheus" {
   }
 
   metadata = {
-    user-data = "${file("./cloud-config.txt")}"
-    ssh-keys  = "sysadmin:${local.prometheus_ssh_key}"
+    user-data = data.template_file.cloudinit_prometheus.rendered
   }
 
   labels = {
@@ -419,14 +416,14 @@ resource "yandex_compute_instance" "grafana" {
 
   resources {
     core_fraction = 5
-    memory        = 4
+    memory        = 2
     cores         = 2 
   }
 
   boot_disk {
       mode = "READ_WRITE"
       initialize_params {
-        image_id = var.image-id 
+        image_id = data.yandex_compute_image.ubuntu.image_id 
         type     = "network-hdd"
         size     = 10
       }
@@ -443,8 +440,7 @@ resource "yandex_compute_instance" "grafana" {
   }
 
   metadata = {
-    user-data = "${file("./cloud-config.txt")}"
-    ssh-keys  = "sysadmin:${local.grafana_ssh_key}"
+    user-data = data.template_file.cloudinit_grafana.rendered
   }
   
   labels = {
@@ -460,14 +456,14 @@ resource "yandex_compute_instance" "elasticsearch" {
 
   resources {
     core_fraction = 5
-    memory        = 8
+    memory        = 6
     cores         = 4
   }
 
   boot_disk {
       mode = "READ_WRITE"
       initialize_params {
-        image_id = var.image-id 
+        image_id = data.yandex_compute_image.ubuntu.image_id 
         type     = "network-hdd"
         size     = 10
       }
@@ -484,8 +480,7 @@ resource "yandex_compute_instance" "elasticsearch" {
   }
 
   metadata = {
-    user-data = "${file("./cloud-config.txt")}"
-    ssh-keys  = "sysadmin:${local.elasticsearch_ssh_key}"
+    user-data = data.template_file.cloudinit_elasticsearch.rendered
   }
 
   labels = {
@@ -501,14 +496,14 @@ resource "yandex_compute_instance" "kibana" {
 
   resources {
     core_fraction = 5
-    memory        = 4
+    memory        = 2
     cores         = 2
   }
 
   boot_disk {
       mode = "READ_WRITE"
       initialize_params {
-        image_id = var.image-id 
+        image_id = data.yandex_compute_image.ubuntu.image_id 
         type     = "network-hdd"
         size     = 10
       }
@@ -525,15 +520,14 @@ resource "yandex_compute_instance" "kibana" {
   }
 
   metadata = {
-    user-data = "${file("./cloud-config.txt")}"
-    ssh-keys  = "sysadmin:${local.kibana_ssh_key}"
+    user-data = data.template_file.cloudinit_kibana.rendered
   }
 
   labels = {
     ansible_group = "kibana"
   } 
 }
-/*
+
 # Создание шаблона для файла ~/.ssh/config
 resource "template_file" "ssh_config" {
   template = <<EOT
@@ -557,6 +551,9 @@ Host ${yandex_compute_instance.grafana.network_interface[0].ip_address}
 Host ${yandex_compute_instance.elasticsearch.network_interface[0].ip_address}
   IdentityFile ~/.ssh/elasticsearch
 
+Host ${yandex_compute_instance.prometheus.network_interface[0].ip_address}
+  IdentityFile ~/.ssh/prometheus
+
 Host ${yandex_compute_instance.kibana.network_interface[0].ip_address}
   IdentityFile ~/.ssh/kibana
 
@@ -576,5 +573,104 @@ resource "local_file" "ssh_config" {
   content  = template_file.ssh_config.rendered
   filename = pathexpand("~/.ssh/config")
 }
-*/
+
 #########Создание ВМ для Prometheus, Grafana, Elasticsearch и Kibana#########
+
+#####################Генерация конфигурации  cloud-init######################
+
+data "template_file" "cloudinit_bastion" {
+  template = file("./cloud-init.yml")
+  vars = {
+    ssh_key = local.bastion_ssh_key
+  }
+}
+
+data "template_file" "cloudinit_web" {
+  template = file("./cloud-init.yml")
+  vars = {
+    ssh_key = local.web_server_ssh_key
+  }
+}
+
+data "template_file" "cloudinit_prometheus" {
+  template = file("./cloud-init.yml")
+  vars = {
+    ssh_key = local.prometheus_ssh_key
+  }
+}
+
+data "template_file" "cloudinit_grafana" {
+  template = file("./cloud-init.yml")
+  vars = {
+    ssh_key = local.grafana_ssh_key
+  }
+}
+
+data "template_file" "cloudinit_elasticsearch" {
+  template = file("./cloud-init.yml")
+  vars = {
+    ssh_key = local.elasticsearch_ssh_key
+  }
+}
+
+data "template_file" "cloudinit_kibana" {
+  template = file("./cloud-init.yml")
+  vars = {
+    ssh_key = local.kibana_ssh_key
+  }
+}
+
+#####################Генерация конфигурации  cloud-init######################
+
+# Считываем информацию об образе Ubuntu 20.04 LTS
+data "yandex_compute_image" "ubuntu" {
+  family = var.vm_web_image_family 
+}
+
+# Создаем inventory
+resource "local_file" "hosts_templatefile" {
+  content = templatefile("${path.module}/hosts.tftpl",
+    {
+      webservers = yandex_compute_instance_group.web_server.instances,
+      prometheus  = [yandex_compute_instance.prometheus],
+      grafana    = [yandex_compute_instance.grafana],
+      elasticsearch = [yandex_compute_instance.elasticsearch],
+      kibana  = [yandex_compute_instance.kibana],
+      bastion    = [yandex_compute_instance.bastion_host]
+    }
+  )
+
+  filename = "${abspath(path.module)}/hosts.ini"
+}
+
+# resource "null_resource" "web_hosts_provision" {
+#   count = var.web_provision == true ? 1 : 0
+  
+#   depends_on = [
+#     yandex_compute_instance_group.web_server,
+#     yandex_compute_instance.prometheus,
+#     yandex_compute_instance.grafana,
+#     yandex_compute_instance.elasticsearch,
+#     yandex_compute_instance.kibana,
+#     yandex_compute_instance.bastion_host
+#   ]
+
+#   provisioner "local-exec" {
+#     command    = "> ~/.ssh/known_hosts && eval $(ssh-agent) | ssh-add ~/.ssh/"
+
+#   }
+
+#   #Запуск ansible-playbook
+#   provisioner "local-exec" {
+   
+#     command = "ANSIBLE_HOST_KEY_CHECKING=False ansible-playbook -i hosts.ini test.yml > ansible.log 2>&1"
+
+#     environment = { ANSIBLE_HOST_KEY_CHECKING = "False" }
+
+#   }
+#   triggers = {
+#     always_run      = "${timestamp()}"
+#     always_run_uuid = "${uuid()}"
+#   }
+
+# }

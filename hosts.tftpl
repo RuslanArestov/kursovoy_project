@@ -1,0 +1,40 @@
+[webservers]
+
+%{~ for i in webservers ~}
+${i["name"]}   ansible_host=${i["network_interface"][0]["ip_address"]}
+%{~ endfor ~}
+
+
+[prometheus]
+
+%{~ for i in prometheus ~}
+${i["name"]}   ansible_host=${i["network_interface"][0]["ip_address"]}
+%{~ endfor ~}
+
+
+[grafana]
+
+%{~ for i in grafana ~}
+${i["name"]}   ansible_host=${i["network_interface"][0]["ip_address"]}
+%{~ endfor ~}
+
+
+[elasticsearch]
+
+%{~ for i in elasticsearch ~}
+${i["name"]}   ansible_host=${i["network_interface"][0]["ip_address"]}
+%{~ endfor ~}
+
+
+[kibana]
+
+%{~ for i in kibana ~}
+${i["name"]}   ansible_host=${i["network_interface"][0]["ip_address"]}
+%{~ endfor ~}
+
+
+[bastion]
+
+%{~ for i in bastion ~}
+${i["name"]}   ansible_host=${i["network_interface"][0]["nat_ip_address"]}
+%{~ endfor ~}
