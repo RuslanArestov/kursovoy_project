@@ -9,6 +9,7 @@ resource "yandex_vpc_subnet" "private-subnet-1" {
   zone           = "ru-central1-a"
   network_id     = yandex_vpc_network.network.id
   v4_cidr_blocks = ["192.168.10.0/24"]
+  route_table_id = yandex_vpc_route_table.private_route_table.id
 }
 
 resource "yandex_vpc_subnet" "private-subnet-2" {
@@ -16,6 +17,7 @@ resource "yandex_vpc_subnet" "private-subnet-2" {
   zone           = "ru-central1-b"
   network_id     = yandex_vpc_network.network.id
   v4_cidr_blocks = ["192.168.20.0/24"]
+  route_table_id = yandex_vpc_route_table.private_route_table.id
 }
 
 resource "yandex_vpc_subnet" "public-subnet" {
@@ -23,35 +25,36 @@ resource "yandex_vpc_subnet" "public-subnet" {
   zone           = "ru-central1-a"
   network_id     = yandex_vpc_network.network.id
   v4_cidr_blocks = ["192.168.30.0/24"]
+  route_table_id = yandex_vpc_route_table.public_route_table.id
 }
 
-# Шлюз
-resource "yandex_vpc_gateway" "egress-gateway" {
-  name = "egress-gateway"
-  shared_egress_gateway {}
+# Интернет-Шлюз
+resource "yandex_vpc_gateway" "internet_gateway" {
+  name = "internet-gateway"
 }
 
-# Таблица маршрутизации
-resource "yandex_vpc_route_table" "route-table" {
-  name = "route-table"
+# Таблица маршрутизации для bastion
+resource "yandex_vpc_route_table" "public_route_table" {
+  name       = "public-route-table"
   network_id = yandex_vpc_network.network.id
 
-/*  static_route {
-    destination_prefix = "192.168.10.0/24"
-    next_hop_address    = yandex_compute_instance.bastion_host.network_interface[0].ip_address
-  }
-
-  static_route {
-    destination_prefix = "192.168.20.0/24"
-    next_hop_address    = yandex_compute_instance.bastion_host.network_interface[0].ip_address
-  }*/
-
-  # Маршрут по умолчанию
   static_route {
     destination_prefix = "0.0.0.0/0"
-    gateway_id         = yandex_vpc_gateway.egress-gateway.id
+    gateway_id         = yandex_vpc_gateway.internet_gateway.id
   }
 }
+
+# Таблица маршрутизации для приватных сетей без NAT
+resource "yandex_vpc_route_table" "private_route_table" {
+  name       = "private-route-table"
+  network_id = yandex_vpc_network.network.id
+
+  static_route {
+    destination_prefix = "0.0.0.0/0"
+    next_hop_address   = yandex_compute_instance.bastion_host.network_interface[0].ip_address
+  }
+}
+
 
 ##############Создание VPC и подсетей, и таблицы маршрутизации###############
 
@@ -333,13 +336,13 @@ resource "yandex_compute_instance" "bastion_host" {
   resources {
     core_fraction = 5
     memory = 2
-    cores  = 2 
+    cores  = 2
   }
 
   boot_disk {
       mode = "READ_WRITE"
       initialize_params {
-        image_id = data.yandex_compute_image.ubuntu.image_id 
+        image_id = data.yandex_compute_image.nat-instance.image_id 
         type     = "network-hdd"
         size     = 10
       }
@@ -355,9 +358,40 @@ resource "yandex_compute_instance" "bastion_host" {
     nat                = true # Устанавливаем публичный адрес
   }
 
+  # network_interface {
+  #   subnet_id          = yandex_vpc_subnet.private-subnet-1
+  #   security_group_ids = [yandex_vpc_security_group.web-sg]
+  #   nat                = false
+  # }
+
+  # network_interface {
+  #   subnet_id          = yandex_vpc_subnet.private-subnet-2
+  #   security_group_ids = [yandex_vpc_security_group.web-sg]
+  #   nat                = false
+  # }
+
   metadata = {
     user-data = data.template_file.cloudinit_bastion.rendered
   }
+
+  # provisioner "file" {
+  #   source      = "nat-setup.sh"
+  #   destination = "/tmp/nat-setup.sh"
+  # }
+
+  # provisioner "remote-exec" {
+  #   inline = [
+  #     "chmod +x /tmp/nat-setup.sh",
+  #     "/tmp/nat-setup.sh"
+  #   ]
+
+  #   connection {
+  #     type        = "ssh"
+  #     user        = "sysadmin"
+  #     private_key = file("~/.ssh/bastion")
+  #     host        = yandex_compute_instance.bastion_host.network_interface[0].nat_ip_address
+  #   }
+  # }
 
   labels = {
     ansible_group = "bastion_host"
@@ -377,7 +411,7 @@ resource "yandex_compute_instance" "prometheus" {
   resources {
     core_fraction = 5
     memory        = 2
-    cores         = 2 
+    cores         = 2
   }
 
   boot_disk {
@@ -417,7 +451,7 @@ resource "yandex_compute_instance" "grafana" {
   resources {
     core_fraction = 5
     memory        = 2
-    cores         = 2 
+    cores         = 2
   }
 
   boot_disk {
@@ -456,8 +490,8 @@ resource "yandex_compute_instance" "elasticsearch" {
 
   resources {
     core_fraction = 5
-    memory        = 6
-    cores         = 4
+    memory        = 2
+    cores         = 2
   }
 
   boot_disk {
@@ -627,6 +661,10 @@ data "yandex_compute_image" "ubuntu" {
   family = var.vm_web_image_family 
 }
 
+data "yandex_compute_image" "nat-instance" {
+  family = var.vm_nat_instance_image_family
+}
+
 # Создаем inventory
 resource "local_file" "hosts_templatefile" {
   content = templatefile("${path.module}/hosts.tftpl",
@@ -641,6 +679,11 @@ resource "local_file" "hosts_templatefile" {
   )
 
   filename = "${abspath(path.module)}/hosts.ini"
+
+  depends_on = [
+    yandex_vpc_subnet.private-subnet-1,
+    yandex_vpc_subnet.private-subnet-2
+     ]
 }
 
 # resource "null_resource" "web_hosts_provision" {

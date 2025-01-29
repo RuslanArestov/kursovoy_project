@@ -21,6 +21,11 @@ variable "vm_web_image_family" {
   default     = "ubuntu-2004-lts"
 }
 
+variable "vm_nat_instance_image_family" {
+  type        = string
+  default     = "nat-instance-ubuntu-2204"
+}
+
 variable "web_provision" {
   type        = bool
   default     = true
